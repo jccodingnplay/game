@@ -17,11 +17,68 @@ const DIR_KEYS = {
   ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up', ArrowRight: 'right'
 };
 const LANE_ORDER = ['left', 'down', 'up', 'right'];
-
 const PERFECT_WINDOW = 70;   // ms
 const GOOD_WINDOW    = 150;  // ms
 const MISS_WINDOW    = 220;  // ms
 const TRAVEL_TIME    = 1800; // ms for note to travel full height
+
+const LANE_L_POS = { left: '0%', down: '25%', up: '50%', right: '75%' };
+
+// ========================
+// 1.5 AUDIO MANAGER
+// ========================
+
+class AudioManager {
+  constructor() {
+    this.ctx = null;
+    this.masterGain = null;
+  }
+
+  init() {
+    if (this.ctx) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.masterGain = this.ctx.createGain();
+    this.masterGain.gain.value = 0.25;
+    this.masterGain.connect(this.ctx.destination);
+  }
+
+  playHit(type) {
+    if (!this.ctx) return;
+    // Simple synth blip
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(type === 'perfect' ? 880 : 440, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.1);
+    
+    g.gain.setValueAtTime(0.3, this.ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+    
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.1);
+  }
+
+  playMiss() {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(110, this.ctx.currentTime);
+    osc.frequency.linearRampToValueAtTime(40, this.ctx.currentTime + 0.2);
+    
+    g.gain.setValueAtTime(0.2, this.ctx.currentTime);
+    g.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+    
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.2);
+  }
+}
+
+const audio = new AudioManager();
 
 // ========================
 // 2. NOTE GENERATORS
@@ -287,7 +344,7 @@ function initSongSelect() {
 
   const main = document.createElement('div');
   main.className = 'select-row';
-  main.style.cssText = 'flex:1;overflow:hidden;display:flex;min-height:0;';
+  // CSS handles the flex directions
   selectScreen.appendChild(main);
   main.appendChild(wrap);
   main.appendChild(preview);
@@ -304,7 +361,10 @@ function initSongSelect() {
   });
 
   $('btnStartGame').addEventListener('click', () => {
-    if (selectedSong) startGame(selectedSong);
+    if (selectedSong) {
+      audio.init(); // Initialize on click
+      startGame(selectedSong);
+    }
   });
 }
 
@@ -454,12 +514,10 @@ function spawnNoteEl(note, laneArea) {
 function missNote(note) {
   note.missed = true;
   if (note.el) {
-    const el = note.el;
+    note.el.remove(); // Instant remove
     note.el = null;
-    el.style.opacity = '0.15';
-    el.style.transition = 'opacity 0.2s';
-    setTimeout(() => el.remove(), 220);
   }
+  audio.playMiss();
   gameState.combo = 0;
   gameState.miss++;
   updateHUD();
@@ -469,11 +527,10 @@ function missNote(note) {
 function hitNote(note, quality) {
   note.hit = true;
   if (note.el) {
-    const el = note.el;
+    note.el.remove(); // Instant remove
     note.el = null;
-    el.classList.add('perfect-flash');
-    setTimeout(() => el.remove(), 250);
   }
+  audio.playHit(quality);
 
   // Hit-zone flash
   const hitMap = {
@@ -608,6 +665,12 @@ function setHitZonePressed(dir, pressed) {
 function processInput(dir) {
   if (!gameState) return;
   const elapsed = gameState.elapsed;
+
+  // Move catcher
+  const catcher = $('gameCatcher');
+  if (catcher) {
+    catcher.style.left = LANE_L_POS[dir];
+  }
 
   let best      = null;
   let bestDelta = Infinity;
