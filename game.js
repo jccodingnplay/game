@@ -956,7 +956,167 @@ function loadSongIntoEditor(id) {
 }
 
 // ========================
-// 12. BOOT
+// 12. FROST CANVAS
+// ========================
+
+const FROST_PARTICLES = [];
+
+function initFrostCanvas() {
+  const canvas = $('frostCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Spawn frost / ice crystal particles
+  const COUNT = 60;
+  const COLORS = [
+    'rgba(152,251,152,OPA)', // pale green
+    'rgba(50,205,50,OPA)',   // lime
+    'rgba(0,128,128,OPA)',   // teal
+    'rgba(154,205,50,OPA)',  // yellow-green
+    'rgba(255,255,255,OPA)', // white sparkle
+  ];
+
+  for (let i = 0; i < COUNT; i++) {
+    FROST_PARTICLES.push(makeFrostParticle(canvas));
+  }
+
+  function makeFrostParticle(canvas, fromTop = false) {
+    const colorTpl = COLORS[Math.floor(Math.random() * COLORS.length)];
+    const opa      = (0.05 + Math.random() * 0.25).toFixed(2);
+    const color    = colorTpl.replace('OPA', opa);
+    return {
+      x:      Math.random() * canvas.width,
+      y:      fromTop ? -20 : Math.random() * canvas.height,
+      r:      1 + Math.random() * 3.5,         // radius
+      vx:     (Math.random() - 0.5) * 0.4,
+      vy:     0.2 + Math.random() * 0.6,
+      color,
+      twinkle: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.02 + Math.random() * 0.04,
+      type:   Math.random() < 0.4 ? 'crystal' : 'dot',
+      angle:  Math.random() * Math.PI * 2,
+      spin:   (Math.random() - 0.5) * 0.02,
+    };
+  }
+
+  function drawCrystal(ctx, p) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle);
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 1;
+    const arms = 6;
+    for (let a = 0; a < arms; a++) {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      const len = p.r * 4;
+      ctx.lineTo(len, 0);
+      // small side branches
+      ctx.moveTo(len * 0.5, 0);
+      ctx.lineTo(len * 0.5 + p.r, -p.r);
+      ctx.moveTo(len * 0.5, 0);
+      ctx.lineTo(len * 0.5 + p.r,  p.r);
+      ctx.stroke();
+      ctx.rotate(Math.PI * 2 / arms);
+    }
+    ctx.restore();
+  }
+
+  function tick() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (const p of FROST_PARTICLES) {
+      p.x     += p.vx;
+      p.y     += p.vy;
+      p.angle += p.spin;
+      p.twinkle += p.twinkleSpeed;
+
+      // Twinkle opacity pulse
+      const pulse = 0.7 + 0.3 * Math.sin(p.twinkle);
+      ctx.globalAlpha = pulse;
+
+      if (p.type === 'crystal') {
+        drawCrystal(ctx, p);
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+
+      // Reset if off screen
+      if (p.y > canvas.height + 30 || p.x < -30 || p.x > canvas.width + 30) {
+        Object.assign(p, makeFrostParticle(canvas, true));
+        p.y = -20;
+        p.x = Math.random() * canvas.width;
+      }
+    }
+
+    requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+// ========================
+// 13. DRAG / SCROLL PREVENTION
+// ========================
+
+function initDragPrevention() {
+  // Prevent default touchmove (scrolling/dragging) on game elements
+  // Only allow scroll in dev screen and song list
+  document.addEventListener('touchmove', e => {
+    const target = e.target;
+    // Allow scrolling in permitted containers
+    if (
+      target.closest('#screen-dev') ||
+      target.closest('.song-list-wrap') ||
+      target.closest('.dev-timeline')
+    ) return;
+    e.preventDefault();
+  }, { passive: false });
+
+  // Prevent context menu on long press
+  document.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Prevent drag start on images / elements
+  document.addEventListener('dragstart', e => e.preventDefault());
+}
+
+// ========================
+// 14. PORTRAIT DETECTION
+// ========================
+
+function initPortraitDetection() {
+  const overlay = $('rotateOverlay');
+  if (!overlay) return;
+
+  function check() {
+    // Only show on actual mobile devices
+    const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ||
+                     (window.innerWidth <= 900 && 'ontouchstart' in window);
+    if (isMobile && window.innerHeight > window.innerWidth) {
+      overlay.style.display = 'flex';
+    } else {
+      overlay.style.display = 'none';
+    }
+  }
+
+  check();
+  window.addEventListener('resize',      check);
+  window.addEventListener('orientationchange', () => setTimeout(check, 300));
+}
+
+// ========================
+// 15. BOOT
 // ========================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -966,5 +1126,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initGameControls();
   initInput();
   initDev();
+  initFrostCanvas();
+  initDragPrevention();
+  initPortraitDetection();
   showScreen('menu');
 });
+
