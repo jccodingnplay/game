@@ -17,12 +17,11 @@ const DIR_KEYS = {
   ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up', ArrowRight: 'right'
 };
 const LANE_ORDER = ['left', 'down', 'up', 'right'];
+
 const PERFECT_WINDOW = 70;   // ms
 const GOOD_WINDOW    = 150;  // ms
 const MISS_WINDOW    = 220;  // ms
 const TRAVEL_TIME    = 1800; // ms for note to travel full height
-
-const LANE_L_POS = { left: '0%', down: '25%', up: '50%', right: '75%' };
 
 // ========================
 // 1.5 AUDIO MANAGER
@@ -34,47 +33,48 @@ class AudioManager {
     this.masterGain = null;
   }
 
-  init() {
+  ensureContext() {
     if (this.ctx) return;
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.25;
+    this.masterGain.gain.value = 0.3;
     this.masterGain.connect(this.ctx.destination);
+    
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
   }
 
-  playHit(type) {
-    if (!this.ctx) return;
-    // Simple synth blip
+  playNote(freq, type = 'sine', duration = 0.1, volume = 1) {
+    this.ensureContext();
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(type === 'perfect' ? 880 : 440, this.ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(110, this.ctx.currentTime + 0.1);
     
-    g.gain.setValueAtTime(0.3, this.ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+    
+    g.gain.setValueAtTime(volume, this.ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
     
     osc.connect(g);
     g.connect(this.masterGain);
+    
     osc.start();
-    osc.stop(this.ctx.currentTime + 0.1);
+    osc.stop(this.ctx.currentTime + duration);
+  }
+
+  playHit(level) {
+    if (level === 'perfect') {
+      this.playNote(880, 'sine', 0.15, 1);
+      this.playNote(1760, 'sine', 0.05, 0.5);
+    } else {
+      this.playNote(440, 'sine', 0.15, 0.8);
+    }
   }
 
   playMiss() {
-    if (!this.ctx) return;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(110, this.ctx.currentTime);
-    osc.frequency.linearRampToValueAtTime(40, this.ctx.currentTime + 0.2);
-    
-    g.gain.setValueAtTime(0.2, this.ctx.currentTime);
-    g.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
-    
-    osc.connect(g);
-    g.connect(this.masterGain);
-    osc.start();
-    osc.stop(this.ctx.currentTime + 0.2);
+    this.playNote(110, 'triangle', 0.3, 1.2);
+    this.playNote(55, 'square', 0.1, 0.4);
   }
 }
 
@@ -344,7 +344,7 @@ function initSongSelect() {
 
   const main = document.createElement('div');
   main.className = 'select-row';
-  // CSS handles the flex directions
+  main.style.cssText = 'flex:1;overflow:hidden;display:flex;min-height:0;';
   selectScreen.appendChild(main);
   main.appendChild(wrap);
   main.appendChild(preview);
@@ -361,10 +361,7 @@ function initSongSelect() {
   });
 
   $('btnStartGame').addEventListener('click', () => {
-    if (selectedSong) {
-      audio.init(); // Initialize on click
-      startGame(selectedSong);
-    }
+    if (selectedSong) startGame(selectedSong);
   });
 }
 
@@ -499,7 +496,7 @@ function spawnNoteEl(note, laneArea) {
   const laneIdx = LANE_ORDER.indexOf(note.direction);
   if (laneIdx < 0) return;
 
-  const lane = laneArea.querySelectorAll('.lane')[laneIdx];
+    const lane = laneArea.querySelectorAll('.lane')[laneIdx];
   if (!lane) return;
 
   const el = document.createElement('div');
@@ -511,54 +508,48 @@ function spawnNoteEl(note, laneArea) {
   note.el = el;
 }
 
-function missNote(note) {
-  note.missed = true;
+function hitNote(note, type) {
+  note.hit = true;
+  gameState[type]++;
+  
+  // Update score/combo
+  const baseScore = (type === 'perfect' ? 1000 : 500);
+  gameState.score += baseScore + (gameState.combo * 10);
+  gameState.combo++;
+  if (gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
+  
+  if (gameState.combo >= 5) showComboFly(gameState.combo);
+  updateHUD();
+  showJudgment(type === 'perfect' ? 'PERFECT!' : 'GOOD', type);
+  audio.playHit(type);
+  
   if (note.el) {
-    note.el.remove(); // Instant remove
+    note.el.remove();
     note.el = null;
   }
-  audio.playMiss();
-  gameState.combo = 0;
-  gameState.miss++;
-  updateHUD();
-  showJudgment('MISS', 'miss');
 }
 
-function hitNote(note, quality) {
-  note.hit = true;
+function missNote(note) {
+  note.missed = true;
+  gameState.combo = 0;
+  gameState.miss++;
+  
+  updateHUD();
+  showJudgment('MISS', 'miss');
+  audio.playMiss();
+
   if (note.el) {
-    note.el.remove(); // Instant remove
+    note.el.remove();
     note.el = null;
   }
-  audio.playHit(quality);
 
-  // Hit-zone flash
-  const hitMap = {
-    left:  $('hitLeft'),
-    down:  $('hitDown'),
-    up:    $('hitUp'),
-    right: $('hitRight')
-  };
+  // Visual feedback on hit zone
+  const hitMap = { left: $('hitLeft'), down: $('hitDown'), up: $('hitUp'), right: $('hitRight') };
   const hitEl = hitMap[note.direction];
   if (hitEl) {
     hitEl.classList.add('hit-anim');
     setTimeout(() => hitEl.classList.remove('hit-anim'), 200);
   }
-
-  if (quality === 'perfect') {
-    gameState.score   += 1000 + gameState.combo * 5;
-    gameState.perfect++;
-    showJudgment('PERFECT!', 'perfect');
-  } else {
-    gameState.score += 500 + gameState.combo * 2;
-    gameState.good++;
-    showJudgment('GOOD', 'good');
-  }
-
-  gameState.combo++;
-  if (gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
-  if (gameState.combo >= 5) showComboFly(gameState.combo);
-  updateHUD();
 }
 
 function updateHUD() {
@@ -574,11 +565,13 @@ let judgmentTimeout = null;
 function showJudgment(text, cls) {
   const el = $('judgmentDisplay');
   el.className = 'judgment-display';
-  void el.offsetWidth; // force reflow to restart animation
+  void el.offsetWidth; // trigger reflow
   el.textContent = text;
   el.classList.add('show', cls);
   if (judgmentTimeout) clearTimeout(judgmentTimeout);
-  judgmentTimeout = setTimeout(() => { el.className = 'judgment-display'; }, 650);
+  judgmentTimeout = setTimeout(() => {
+    el.classList.remove('show');
+  }, 500);
 }
 
 let comboTimeout = null;
@@ -625,6 +618,7 @@ function endGame() {
 
 function initInput() {
   document.addEventListener('keydown', e => {
+    audio.ensureContext(); // Auto-unlock on first key
     const dir = DIR_KEYS[e.key];
     if (!dir) return;
     e.preventDefault();
@@ -647,6 +641,7 @@ function initInput() {
     if (!hz) return;
     hz.addEventListener('touchstart', ev => {
       ev.preventDefault();
+      audio.ensureContext(); // Auto-unlock on touch
       if (gameState && !gameState.paused && !gameState.finished) {
         processInput(dir);
         setHitZonePressed(dir, true);
@@ -666,10 +661,10 @@ function processInput(dir) {
   if (!gameState) return;
   const elapsed = gameState.elapsed;
 
-  // Move catcher
-  const catcher = $('gameCatcher');
-  if (catcher) {
-    catcher.style.left = LANE_L_POS[dir];
+  // Move Catcher
+  const laneIdx = LANE_ORDER.indexOf(dir);
+  if (laneIdx !== -1) {
+    $('catcher').style.left = (laneIdx * 25) + '%';
   }
 
   let best      = null;
